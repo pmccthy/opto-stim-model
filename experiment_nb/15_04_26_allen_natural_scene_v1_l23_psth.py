@@ -6,6 +6,8 @@ Author: patrick.mccarthy@dpag.ox.ac.uk
 import os
 import pickle
 import shutil
+import time
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
@@ -17,13 +19,13 @@ from allensdk.brain_observatory.ecephys.ecephys_project_cache import EcephysProj
 from allensdk.core.reference_space_cache import ReferenceSpaceCache
 
 # define parameters for PSTH computation
-BIN_SIZE = 0.01   # 10 ms
-T_PRE    = 0.0 
-T_POST   = 0.25  
+BIN_SIZE = 0.005   # 10 ms
+T_PRE    = 0.05 
+T_POST   = 0.35  
 
 # Load data
 # initialise cache
-CACHE_DIR = Path('/Users/pmccarthy/Documents/experimental_data/allen_visual_neuropixels') 
+CACHE_DIR = Path('/Users/pmccarthy/Documents/experimental_data/allen_visual_neuropixels_longwindow_5ms_bins') 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 manifest_path = CACHE_DIR / 'manifest.json'
 cache = EcephysProjectCache.from_warehouse(manifest=str(manifest_path))
@@ -40,7 +42,8 @@ v1_ns_sessions = sessions[
     has_visp
 ] 
 
-print(f'{len(v1_ns_sessions)} sessions with VISp + natural scenes')
+n_sessions = len(v1_ns_sessions)
+print(f'{n_sessions} sessions with VISp + natural scenes')
 
 # load CCF annotation volume once (cached after first download, ~1 GB)
 resolution = 10  # microns per voxel
@@ -54,14 +57,17 @@ id_to_acronym = {s['id']: s['acronym'] for s in rsc.get_structure_tree().nodes()
 
 bin_edges = np.arange(0, T_POST + BIN_SIZE, BIN_SIZE)  # T_PRE=0, no pre-stim (ISI ≈ 250 ms)
 
-for session_id in v1_ns_sessions.index:
+session_durations = []
+
+for session_num, session_id in enumerate(v1_ns_sessions.index, start=1):
 
     out_path = CACHE_DIR / f'{session_id}_l23_psth_responses.pkl'
     if out_path.exists():
         print(f'Session {session_id}: already extracted, skipping.')
         continue
 
-    print(f'\nProcessing session {session_id} ...')
+    print(f'\n[{session_num}/{n_sessions}] Processing session {session_id} ...')
+    session_start = time.time()
     session = cache.get_session_data(session_id)
 
     ## Natural scene stimulus table
@@ -106,7 +112,7 @@ for session_id in v1_ns_sessions.index:
             bin_edges=bin_edges,
             unit_ids=unit_ids,
         ).values  # (num_trials, num_bins, num_units)
-        responses[i, :, :, :] = r
+        responses[i, : , :, :] = r
 
     print(f'  responses shape (stim × trials × bins × units): {responses.shape}')
 
@@ -131,6 +137,15 @@ for session_id in v1_ns_sessions.index:
                                             'layer']].to_dict('list'),
         }, f)
     print(f'  Saved → {out_path}')
+
+    elapsed = time.time() - session_start
+    session_durations.append(elapsed)
+    mean_duration = sum(session_durations) / len(session_durations)
+    sessions_remaining = n_sessions - session_num
+    eta = timedelta(seconds=int(mean_duration * sessions_remaining))
+    print(f'  Session time: {timedelta(seconds=int(elapsed))}  |  '
+          f'Mean: {timedelta(seconds=int(mean_duration))}  |  '
+          f'ETA ({sessions_remaining} remaining): {eta}')
 
     ## Delete NWB file to free disk space (~14 GB per session)
     nwb_path = CACHE_DIR / f'session_{session_id}' / f'session_{session_id}.nwb'
